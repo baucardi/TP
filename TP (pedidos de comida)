@@ -1,0 +1,435 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define LARGO_TEXTO 100
+#define CAPACIDAD_INICIAL 4
+#define ARCHIVO_PEDIDOS "pedidos.txt"
+#define CAMPO_PEDIDO 1
+#define CAMPO_DIRECCION 2
+
+typedef struct
+{
+    char cliente[LARGO_TEXTO];
+    char pedido[LARGO_TEXTO];
+    char direccion[LARGO_TEXTO];
+} Pedido;
+
+typedef struct
+{
+    Pedido *datos;   /* arreglo dinámico de pedidos */
+    int cantidad;    /* pedidos cargados */
+    int capacidad;   /* pedidos que caben sin pedir más memoria */
+} ListaPedidos;
+
+/* ---------- Prototipos ---------- */
+int  iniciarLista(ListaPedidos *lista);
+int  agregarPedido(ListaPedidos *lista, const Pedido *nuevo);
+void liberarLista(ListaPedidos *lista);
+void leerTexto(const char *mensaje, char *destino, int largo);
+void leerObligatorio(const char *mensaje, char *destino, int largo);
+int  preguntarSiNo(const char *mensaje);
+void cargarPedidos(ListaPedidos *lista);
+int  mostrarMenu(void);
+void mostrarDatos(const ListaPedidos *lista);
+int  contarPedidos(const ListaPedidos *lista);
+const char *obtenerCampo(const Pedido *p, int campo);
+int  posicionMasRepetido(const ListaPedidos *lista, int campo, int *veces);
+void mostrarPedidoMasRecurrente(const ListaPedidos *lista);
+void mostrarDireccionMasComun(const ListaPedidos *lista);
+void guardarEnArchivo(const ListaPedidos *lista);
+void cargarDesdeArchivo(ListaPedidos *lista);
+
+/* ---------- Programa principal ---------- */
+int main(void)
+{
+    ListaPedidos lista;
+    int opcion;
+    int estado = 0;
+
+    if (iniciarLista(&lista))
+    {
+        cargarDesdeArchivo(&lista);
+        cargarPedidos(&lista);
+
+        do
+        {
+            opcion = mostrarMenu();
+
+            switch (opcion)
+            {
+                case 1:
+                    mostrarDatos(&lista);
+                    break;
+                case 2:
+                    printf("Cantidad de pedidos: %d\n", contarPedidos(&lista));
+                    break;
+                case 3:
+                    mostrarPedidoMasRecurrente(&lista);
+                    break;
+                case 4:
+                    mostrarDireccionMasComun(&lista);
+                    break;
+                case 0:
+                    printf("Hasta luego.\n");
+                    break;
+                default:
+                    printf("Opcion invalida.\n");
+                    break;
+            }
+        } while (opcion != 0);
+
+        guardarEnArchivo(&lista);
+        liberarLista(&lista);
+    }
+    else
+    {
+        printf("Error: no se pudo reservar memoria.\n");
+        estado = 1;
+    }
+
+    return estado;
+}
+
+/* ---------- Memoria dinámica ---------- */
+
+/* Reserva el espacio inicial. Devuelve 1 si pudo, 0 si falló. */
+int iniciarLista(ListaPedidos *lista)
+{
+    int ok = 0;
+
+    lista->cantidad = 0;
+    lista->capacidad = CAPACIDAD_INICIAL;
+    lista->datos = malloc(lista->capacidad * sizeof(Pedido));
+
+    if (lista->datos != NULL)
+    {
+        ok = 1;
+    }
+    else
+    {
+        lista->capacidad = 0;
+    }
+
+    return ok;
+}
+
+/* Agrega un pedido al final. Devuelve 1 si pudo, 0 si falló la memoria. */
+int agregarPedido(ListaPedidos *lista, const Pedido *nuevo)
+{
+    Pedido *aux;
+    int ok = 1;
+
+    if (lista->cantidad == lista->capacidad)
+    {
+        /* No queda lugar: se duplica la capacidad con realloc */
+        aux = realloc(lista->datos, lista->capacidad * 2 * sizeof(Pedido));
+
+        if (aux != NULL)
+        {
+            lista->datos = aux;
+            lista->capacidad *= 2;
+        }
+        else
+        {
+            ok = 0;
+        }
+    }
+
+    if (ok)
+    {
+        lista->datos[lista->cantidad] = *nuevo;
+        lista->cantidad++;
+    }
+
+    return ok;
+}
+
+/* Libera la memoria reservada. */
+void liberarLista(ListaPedidos *lista)
+{
+    free(lista->datos);
+    lista->datos = NULL;
+    lista->cantidad = 0;
+    lista->capacidad = 0;
+}
+
+/* ---------- Entrada de datos ---------- */
+
+/* Muestra un mensaje y lee una línea sin el salto de línea.
+ * El ';' separa los campos del archivo, por eso se reemplaza por ','. */
+void leerTexto(const char *mensaje, char *destino, int largo)
+{
+    char *p;
+
+    printf("%s", mensaje);
+
+    if (fgets(destino, largo, stdin) != NULL)
+    {
+        destino[strcspn(destino, "\n")] = '\0';
+
+        while ((p = strchr(destino, ';')) != NULL)
+        {
+            *p = ',';
+        }
+    }
+    else
+    {
+        destino[0] = '\0';
+    }
+}
+
+/* Pide un dato obligatorio: repite la pregunta mientras se deje vacío. */
+void leerObligatorio(const char *mensaje, char *destino, int largo)
+{
+    do
+    {
+        leerTexto(mensaje, destino, largo);
+    } while (destino[0] == '\0' && !feof(stdin));
+}
+
+/* Hace una pregunta de sí/no. Devuelve 1 si la respuesta empieza con 's' o 'S'. */
+int preguntarSiNo(const char *mensaje)
+{
+    char respuesta[LARGO_TEXTO];
+
+    leerTexto(mensaje, respuesta, LARGO_TEXTO);
+
+    return (respuesta[0] == 's' || respuesta[0] == 'S');
+}
+
+/* Pide pedidos por teclado hasta que el usuario responda que no. */
+void cargarPedidos(ListaPedidos *lista)
+{
+    Pedido nuevo;
+    int seguir = 1;
+
+    printf("=== CARGA DE PEDIDOS ===\n");
+
+    if (lista->cantidad > 0)
+    {
+        printf("Pedidos guardados en %s: %d\n", ARCHIVO_PEDIDOS, lista->cantidad);
+        seguir = preguntarSiNo("Cargar pedidos nuevos? (s/n): ");
+    }
+
+    while (seguir)
+    {
+        leerObligatorio("Nombre del cliente: ", nuevo.cliente, LARGO_TEXTO);
+        leerObligatorio("Pedido: ", nuevo.pedido, LARGO_TEXTO);
+        leerObligatorio("Direccion: ", nuevo.direccion, LARGO_TEXTO);
+
+        if (agregarPedido(lista, &nuevo))
+        {
+            seguir = preguntarSiNo("Cargar otro pedido? (s/n): ");
+        }
+        else
+        {
+            printf("Error: no hay memoria para otro pedido.\n");
+            seguir = 0;
+        }
+    }
+}
+
+/* ---------- Menú y consultas ---------- */
+
+/* Muestra el menú y devuelve la opción elegida (-1 si no es válida). */
+int mostrarMenu(void)
+{
+    char entrada[LARGO_TEXTO];
+    int opcion;
+
+    printf("\n===== MENU =====\n");
+    printf("1. Ver datos cargados\n");
+    printf("2. Ver cantidad de pedidos\n");
+    printf("3. Ver pedido mas recurrente\n");
+    printf("4. Ver direccion mas comun\n");
+    printf("0. Salir\n");
+    leerTexto("Opcion: ", entrada, LARGO_TEXTO);
+
+    if (entrada[0] == '\0' && feof(stdin))
+    {
+        opcion = 0;   /* no hay más entrada (Ctrl+D / Ctrl+Z): salir */
+    }
+    else if (sscanf(entrada, "%d", &opcion) != 1)
+    {
+        opcion = -1;
+    }
+
+    return opcion;
+}
+
+/* Muestra todos los pedidos cargados en forma de tabla. */
+void mostrarDatos(const ListaPedidos *lista)
+{
+    const Pedido *p;
+    int i;
+
+    if (lista->cantidad == 0)
+    {
+        printf("No hay pedidos cargados.\n");
+    }
+    else
+    {
+        printf("\n%-4s %-20s %-20s %s\n", "N", "Cliente", "Pedido", "Direccion");
+
+        for (i = 0; i < lista->cantidad; i++)
+        {
+            p = lista->datos + i;   /* puntero al pedido número i */
+            printf("%-4d %-20s %-20s %s\n", i + 1, p->cliente, p->pedido, p->direccion);
+        }
+    }
+}
+
+/* Devuelve la cantidad de pedidos cargados. */
+int contarPedidos(const ListaPedidos *lista)
+{
+    return lista->cantidad;
+}
+
+/* Devuelve un puntero al campo elegido (CAMPO_PEDIDO o CAMPO_DIRECCION). */
+const char *obtenerCampo(const Pedido *p, int campo)
+{
+    const char *texto = p->direccion;
+
+    if (campo == CAMPO_PEDIDO)
+    {
+        texto = p->pedido;
+    }
+
+    return texto;
+}
+
+/* Busca el texto que más se repite en el campo elegido.
+ * Devuelve su posición en la lista (-1 si no hay pedidos) y guarda en *veces
+ * cuántas veces aparece. Compara con strcmp (distingue mayúsculas) y, si hay
+ * empate, gana el que se cargó primero. */
+int posicionMasRepetido(const ListaPedidos *lista, int campo, int *veces)
+{
+    const char *actual;
+    int posMaximo = -1;
+    int maximo = 0;
+    int cuenta;
+    int i;
+    int j;
+
+    for (i = 0; i < lista->cantidad; i++)
+    {
+        actual = obtenerCampo(lista->datos + i, campo);
+        cuenta = 0;
+
+        for (j = 0; j < lista->cantidad; j++)
+        {
+            if (strcmp(actual, obtenerCampo(lista->datos + j, campo)) == 0)
+            {
+                cuenta++;
+            }
+        }
+
+        if (cuenta > maximo)
+        {
+            maximo = cuenta;
+            posMaximo = i;
+        }
+    }
+
+    *veces = maximo;
+
+    return posMaximo;
+}
+
+/* Muestra el pedido que más veces se repite. */
+void mostrarPedidoMasRecurrente(const ListaPedidos *lista)
+{
+    int veces;
+    int pos = posicionMasRepetido(lista, CAMPO_PEDIDO, &veces);
+
+    if (pos == -1)
+    {
+        printf("No hay pedidos cargados.\n");
+    }
+    else
+    {
+        printf("Pedido mas recurrente: %s (%d %s)\n",
+               lista->datos[pos].pedido, veces, (veces == 1) ? "vez" : "veces");
+    }
+}
+
+/* Muestra la dirección que más veces se repite. */
+void mostrarDireccionMasComun(const ListaPedidos *lista)
+{
+    int veces;
+    int pos = posicionMasRepetido(lista, CAMPO_DIRECCION, &veces);
+
+    if (pos == -1)
+    {
+        printf("No hay pedidos cargados.\n");
+    }
+    else
+    {
+        printf("Direccion mas comun: %s (%d %s)\n",
+               lista->datos[pos].direccion, veces, (veces == 1) ? "vez" : "veces");
+    }
+}
+
+/* ---------- Archivo de texto ---------- */
+
+/* Guarda los pedidos en ARCHIVO_PEDIDOS, una línea por pedido: cliente;pedido;direccion */
+void guardarEnArchivo(const ListaPedidos *lista)
+{
+    FILE *archivo = fopen(ARCHIVO_PEDIDOS, "w");
+    int i;
+
+    if (archivo != NULL)
+    {
+        for (i = 0; i < lista->cantidad; i++)
+        {
+            fprintf(archivo, "%s;%s;%s\n",
+                    lista->datos[i].cliente,
+                    lista->datos[i].pedido,
+                    lista->datos[i].direccion);
+        }
+
+        fclose(archivo);
+    }
+    else
+    {
+        printf("No se pudo abrir %s para guardar.\n", ARCHIVO_PEDIDOS);
+    }
+}
+
+/* Lee ARCHIVO_PEDIDOS (si existe) y agrega cada línea a la lista. */
+void cargarDesdeArchivo(ListaPedidos *lista)
+{
+    FILE *archivo = fopen(ARCHIVO_PEDIDOS, "r");
+    char linea[LARGO_TEXTO * 3 + 3];   /* 3 campos + 2 ';' + '\n' + '\0' */
+    char *cliente;
+    char *pedido;
+    char *direccion;
+    Pedido nuevo;
+    int ok = 1;
+
+    if (archivo != NULL)   /* si no existe, simplemente no hay datos previos */
+    {
+        while (ok && fgets(linea, sizeof(linea), archivo) != NULL)
+        {
+            cliente = strtok(linea, ";\n");
+            pedido = strtok(NULL, ";\n");
+            direccion = strtok(NULL, ";\n");
+
+            if (cliente != NULL && pedido != NULL && direccion != NULL)
+            {
+                snprintf(nuevo.cliente, LARGO_TEXTO, "%s", cliente);
+                snprintf(nuevo.pedido, LARGO_TEXTO, "%s", pedido);
+                snprintf(nuevo.direccion, LARGO_TEXTO, "%s", direccion);
+                ok = agregarPedido(lista, &nuevo);
+            }
+        }
+
+        fclose(archivo);
+
+        if (!ok)
+        {
+            printf("Aviso: no hubo memoria para cargar todos los pedidos del archivo.\n");
+        }
+    }
+}
